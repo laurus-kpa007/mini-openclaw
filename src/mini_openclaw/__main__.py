@@ -202,7 +202,7 @@ async def _chat_loop(config, auto_approve: bool) -> None:
                 f"mini-openclaw v0.1.0 | model: {config.llm.model}\n"
                 f"Tools: {', '.join(gateway.tool_registry.list_names())}\n"
                 f"HITL: {'auto-approve' if auto_approve else 'interactive'}\n"
-                "Type 'exit' or 'quit' to end, '/tools' to list tools",
+                "Type 'exit' or 'quit' to end, '/tools' '/jobs' '/hitl' for info",
                 title="mini-openclaw",
                 border_style="cyan",
             )
@@ -237,6 +237,24 @@ async def _chat_loop(config, auto_approve: bool) -> None:
                         )
                 else:
                     console.print("  [dim]No pending approval requests[/dim]")
+                continue
+            if user_input == "/jobs":
+                if gateway.scheduler:
+                    jobs = gateway.scheduler.list_jobs()
+                    if jobs:
+                        console.print(f"[bold]Scheduled Jobs ({len(jobs)}):[/bold]")
+                        for j in jobs:
+                            status_color = {"active": "green", "paused": "yellow"}.get(j.status.value, "dim")
+                            console.print(
+                                f"  [{status_color}]{j.status.value}[/{status_color}] "
+                                f"[cyan]{j.job_id}[/cyan]: {j.name}\n"
+                                f"    Schedule: {j.schedule} | Runs: {j.run_count}"
+                                + (f"/{j.max_runs}" if j.max_runs else "")
+                            )
+                    else:
+                        console.print("  [dim]No scheduled jobs[/dim]")
+                else:
+                    console.print("  [dim]Scheduler not available[/dim]")
                 continue
 
             result = await gateway.chat(session.session_id, user_input)

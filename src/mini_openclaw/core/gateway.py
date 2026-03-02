@@ -57,6 +57,9 @@ class Gateway:
         from mini_openclaw.core.hitl import HITLManager
         self.hitl = HITLManager()
 
+        # Scheduler (lazy-started in start())
+        self.scheduler: Any = None
+
     async def start(self) -> None:
         """Initialize the Gateway: connect to Ollama, register tools, load plugins."""
         logger.info("Starting Gateway...")
@@ -101,11 +104,22 @@ class Gateway:
             ", ".join(self.tool_registry.list_names()),
         )
 
+        # Initialize and start scheduler
+        from mini_openclaw.core.scheduler import Scheduler
+        from mini_openclaw.tools.builtin.cron_job import set_scheduler
+        self.scheduler = Scheduler(self)
+        set_scheduler(self.scheduler)
+        await self.scheduler.start()
+
         logger.info("Gateway started (model=%s)", self.config.llm.model)
 
     async def shutdown(self) -> None:
         """Gracefully shut down: terminate agents, close connections."""
         logger.info("Shutting down Gateway...")
+
+        # Stop scheduler
+        if self.scheduler:
+            await self.scheduler.stop()
 
         # Cancel pending HITL approvals
         self.hitl.cancel_all()

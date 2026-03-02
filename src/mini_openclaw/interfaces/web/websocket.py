@@ -123,6 +123,20 @@ def create_ws_router() -> APIRouter:
                                     "arguments": req.arguments,
                                 })
                         await websocket.send_json({"type": "hitl_pending", "requests": pending})
+                    elif cmd == "/jobs":
+                        jobs_data = []
+                        if gateway.scheduler:
+                            for j in gateway.scheduler.list_jobs():
+                                jobs_data.append({
+                                    "job_id": j.job_id,
+                                    "name": j.name,
+                                    "schedule": j.schedule,
+                                    "status": j.status.value,
+                                    "run_count": j.run_count,
+                                    "max_runs": j.max_runs,
+                                    "last_run": j.last_run.isoformat() if j.last_run else None,
+                                })
+                        await websocket.send_json({"type": "jobs_list", "jobs": jobs_data})
 
         except WebSocketDisconnect:
             logger.info("WebSocket disconnected for session %s", session_id)

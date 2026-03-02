@@ -14,9 +14,9 @@ User ─── CLI / TUI / Web UI
          └────┬────┘
               │
     ┌─────────┼─────────┐
-    │    EventBus   HITLManager
-    │         │         │
-    ▼         ▼         ▼
+    │    EventBus   HITLManager  Scheduler
+    │         │         │           │
+    ▼         ▼         ▼           ▼
 ┌───────┐ ┌───────┐ ┌───────┐
 │ Agent │→│ Agent │→│ Agent │  ← ReAct loop (LLM ↔ Tool)
 │ d=0   │ │ d=1   │ │ d=2   │
@@ -25,7 +25,7 @@ User ─── CLI / TUI / Web UI
     ▼         ▼
 ┌──────────────────┐
 │  ToolRegistry    │
-│  9 built-in      │
+│  10 built-in     │
 │  + plugins + MCP │
 └──────────────────┘
 ```
@@ -35,7 +35,8 @@ User ─── CLI / TUI / Web UI
 - **Dynamic Agent Spawning** — 부모 에이전트가 `spawn_agent` 도구로 자식을 동적 생성 (depth/concurrency 제한)
 - **ReAct Loop** — LLM 호출 → 도구 실행 → 반복, native tool calling 미지원 모델은 ReAct fallback 자동 적용
 - **HITL (Human-in-the-Loop)** — 위험한 도구 실행 전 사용자 승인 요청 (Approve / Always / Deny)
-- **9 Built-in Tools** — file_read, file_write, shell_exec, web_search, http_request, pip_install, python_exec, browser_control, spawn_agent
+- **10 Built-in Tools** — file_read, file_write, shell_exec, web_search, http_request, pip_install, python_exec, browser_control, cron_job, spawn_agent
+- **Scheduled Jobs** — 크론잡/인터벌 기반 주기적 작업 등록 (`cron_job` 도구), 에이전트가 자동으로 반복 실행
 - **Plugin System** — `@tool` 데코레이터로 커스텀 도구 등록, MCP 서버 연동
 - **3 Interfaces** — Rich CLI, Textual TUI, FastAPI + WebSocket Web UI
 
@@ -124,6 +125,7 @@ tools:
 | `pip_install` | Python 패키지 설치 | **Yes** |
 | `python_exec` | Python 코드 실행 | **Yes** |
 | `browser_control` | 웹 브라우저 제어 (Playwright) | **Yes** |
+| `cron_job` | 주기적 작업 등록/관리 (크론/인터벌) | **Yes** |
 | `spawn_agent` | 자식 에이전트 생성 | No |
 
 `requires_approval=True`인 도구는 실행 전 HITL 승인이 필요합니다. `--auto-approve` 플래그로 생략 가능.
@@ -144,7 +146,7 @@ async def word_count(text: str) -> str:
 ## Tests
 
 ```bash
-pytest              # 전체 84개 테스트
+pytest              # 전체 120개 테스트
 pytest -v           # 상세 출력
 pytest tests/test_integration.py  # 통합 테스트만
 ```
@@ -157,6 +159,7 @@ pytest tests/test_integration.py  # 통합 테스트만
 | `test_browser_control.py` | 12 | 브라우저 제어, 스크립트 생성 |
 | `test_hitl.py` | 10 | HITL 승인/거부, 정책, 세션 기억 |
 | `test_new_tools.py` | 10 | pip_install, python_exec |
+| `test_scheduler.py` | 36 | 스케줄러, 크론 파싱, cron_job 도구 |
 | `test_react_fallback.py` | 6 | ReAct 패턴 파싱 |
 | `test_tool_registry.py` | 8 | 도구 등록, 권한 필터링 |
 | `test_integration.py` | 34 | Gateway, Agent, HITL, Web UI 통합 |
@@ -172,6 +175,7 @@ src/mini_openclaw/
 │   ├── events.py        # Async EventBus
 │   ├── gateway.py       # Central orchestrator
 │   ├── hitl.py          # Human-in-the-Loop approval
+│   ├── scheduler.py     # Cron/interval job scheduler
 │   └── session.py       # Session isolation
 ├── llm/
 │   ├── base.py          # Abstract LLM client
@@ -184,7 +188,7 @@ src/mini_openclaw/
 │   ├── permissions.py   # Allow/deny lists
 │   ├── plugin_loader.py # @tool decorator + scanner
 │   ├── mcp_client.py    # MCP server bridge
-│   └── builtin/         # 8 built-in tools
+│   └── builtin/         # 10 built-in tools
 └── interfaces/
     ├── cli/app.py       # Textual TUI
     └── web/             # FastAPI + WebSocket + static

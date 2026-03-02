@@ -95,9 +95,9 @@ def registry():
 
 def test_all_core_modules_importable():
     """All core modules can be imported without errors."""
-    from mini_openclaw.core import agent, errors, events, gateway, hitl, session
+    from mini_openclaw.core import agent, errors, events, gateway, hitl, session, scheduler
     from mini_openclaw.config import AppConfig, load_config
-    assert agent and errors and events and gateway and hitl and session
+    assert agent and errors and events and gateway and hitl and session and scheduler
     assert AppConfig and load_config
 
 
@@ -108,12 +108,14 @@ def test_all_tool_modules_importable():
         file_read, file_write, shell_exec,
         web_search, http_request,
         pip_install, python_exec,
+        browser_control, cron_job,
         spawn_agent,
     )
     assert base and registry and permissions
     assert file_read and file_write and shell_exec
     assert web_search and http_request
-    assert pip_install and python_exec and spawn_agent
+    assert pip_install and python_exec
+    assert browser_control and cron_job and spawn_agent
 
 
 def test_all_llm_modules_importable():
@@ -219,18 +221,18 @@ async def test_eventbus_unsubscribe():
 
 
 def test_builtin_tools_all_registered(registry):
-    """All 8 built-in tools are registered."""
+    """All 10 built-in tools are registered."""
     names = registry.list_names()
     expected = [
         "file_read", "file_write", "shell_exec",
         "web_search", "http_request",
         "pip_install", "python_exec",
-        "browser_control",
+        "browser_control", "cron_job",
         "spawn_agent",
     ]
     for name in expected:
         assert name in names, f"Missing tool: {name}"
-    assert len(names) == 9
+    assert len(names) == 10
 
 
 def test_tool_definitions_have_required_fields(registry):
@@ -496,7 +498,7 @@ async def test_gateway_create_session(config):
 
 @pytest.mark.asyncio
 async def test_gateway_start_registers_tools(config):
-    """Gateway.start() registers all 8 builtin tools."""
+    """Gateway.start() registers all 10 builtin tools."""
     gw = Gateway(config)
     # Patch Ollama to avoid network calls
     mock_ollama = MockLLMClient()
@@ -504,10 +506,12 @@ async def test_gateway_start_registers_tools(config):
         await gw.start()
 
     names = gw.tool_registry.list_names()
-    assert len(names) == 9
+    assert len(names) == 10
     assert "spawn_agent" in names
     assert "pip_install" in names
     assert "browser_control" in names
+    assert "cron_job" in names
+    assert gw.scheduler is not None
     await gw.shutdown()
 
 
