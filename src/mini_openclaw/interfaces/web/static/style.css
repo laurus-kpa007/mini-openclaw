@@ -1,0 +1,297 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+}
+
+.header h1 {
+    font-size: 1.2rem;
+    color: #00d2ff;
+}
+
+.status {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    background: #333;
+}
+
+.status.connected { background: #1b5e20; color: #a5d6a7; }
+.status.disconnected { background: #b71c1c; color: #ef9a9a; }
+
+.main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.chat-area {
+    flex: 3;
+    display: flex;
+    flex-direction: column;
+}
+
+.messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+}
+
+.message {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    max-width: 90%;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+}
+
+.message.user {
+    background: #0f3460;
+    margin-left: auto;
+    border-bottom-right-radius: 2px;
+}
+
+.message.assistant {
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-bottom-left-radius: 2px;
+}
+
+.message.error {
+    background: #3e1a1a;
+    border: 1px solid #b71c1c;
+}
+
+.message.system {
+    background: transparent;
+    color: #888;
+    font-size: 0.85rem;
+    text-align: center;
+    max-width: 100%;
+}
+
+.message .meta {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.5rem;
+}
+
+.input-area {
+    display: flex;
+    padding: 0.75rem;
+    background: #16213e;
+    border-top: 1px solid #0f3460;
+    gap: 0.5rem;
+}
+
+.input-area input {
+    flex: 1;
+    padding: 0.6rem 1rem;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 0.95rem;
+    outline: none;
+}
+
+.input-area input:focus { border-color: #00d2ff; }
+
+.input-area button {
+    padding: 0.6rem 1.5rem;
+    background: #0f3460;
+    color: #00d2ff;
+    border: 1px solid #00d2ff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.input-area button:hover { background: #00d2ff; color: #1a1a2e; }
+
+.sidebar {
+    flex: 1;
+    min-width: 280px;
+    border-left: 1px solid #0f3460;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel + .panel { border-top: 1px solid #0f3460; }
+
+.panel h3 {
+    padding: 0.5rem 1rem;
+    background: #16213e;
+    font-size: 0.85rem;
+    color: #00d2ff;
+}
+
+.panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.tool-entry {
+    padding: 0.25rem 0.5rem;
+    margin-bottom: 0.25rem;
+    border-radius: 3px;
+}
+
+.tool-entry.call { background: rgba(0, 210, 255, 0.1); }
+.tool-entry.result-ok { color: #a5d6a7; }
+.tool-entry.result-fail { color: #ef9a9a; }
+
+.agent-node {
+    padding: 0.25rem 0;
+    padding-left: 1rem;
+    border-left: 2px solid #333;
+    margin-left: 0.5rem;
+}
+
+.agent-node.depth-0 { border-left-color: #00d2ff; margin-left: 0; }
+.agent-node.depth-1 { border-left-color: #ffd700; }
+.agent-node.depth-2 { border-left-color: #ff6b6b; }
+
+.agent-state {
+    display: inline-block;
+    padding: 0 0.25rem;
+    border-radius: 2px;
+    font-size: 0.7rem;
+}
+
+.agent-state.running { background: #1b5e20; }
+.agent-state.completed { background: #333; color: #888; }
+.agent-state.failed { background: #b71c1c; }
+
+/* Tool log approval entry */
+.tool-entry.approval { color: #ffd700; font-weight: bold; }
+
+/* HITL Approval Modal */
+.approval-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.approval-dialog {
+    background: #1a1a2e;
+    border: 2px solid #ffd700;
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    max-width: 550px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.approval-title {
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #ffd700;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.approval-field {
+    margin-bottom: 0.5rem;
+    line-height: 1.6;
+}
+
+.approval-label {
+    color: #888;
+    margin-right: 0.25rem;
+}
+
+.approval-tool {
+    color: #00d2ff;
+    font-weight: bold;
+}
+
+.approval-args {
+    margin: 0.75rem 0;
+}
+
+.approval-args pre {
+    background: #111;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: #ccc;
+    max-height: 150px;
+    overflow-y: auto;
+    margin-top: 0.25rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.approval-buttons {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+    justify-content: center;
+}
+
+.approval-buttons button {
+    padding: 0.5rem 1.25rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 0.9rem;
+    transition: opacity 0.2s;
+}
+
+.approval-buttons button:hover { opacity: 0.85; }
+
+.btn-approve {
+    background: #1b5e20;
+    color: #a5d6a7;
+}
+
+.btn-always {
+    background: #e65100;
+    color: #ffe0b2;
+}
+
+.btn-deny {
+    background: #b71c1c;
+    color: #ef9a9a;
+}

@@ -1,0 +1,42 @@
+gateway:
+  max_concurrent_agents: 8
+  max_spawn_depth: 3
+  max_children_per_agent: 5
+  max_iterations_per_agent: 20
+
+llm:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: glm-5:cloud
+  temperature: 0.7
+  context_window: 8192
+  timeout: 120
+
+session:
+  default_token_budget: 8192
+  max_turns: 50
+  max_tool_output_chars: 4000
+
+security:
+  sandbox_root: null
+  allowed_shell_commands: null
+  blocked_shell_commands:
+    - "rm -rf /"
+    - "format"
+    - "mkfs"
+  allowed_hosts: null
+  require_approval_for:
+    - file_write
+    - shell_exec
+
+tools:
+  plugin_dirs:
+    - ./plugins
+  mcp_servers: []
+
+interface:
+  cli:
+    theme: dark
+  web:
+    host: 127.0.0.1
+    port: 8080

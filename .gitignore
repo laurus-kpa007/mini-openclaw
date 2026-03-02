@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+.env
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.log
+
+# Non-project files
+himalaya*
+share/
+result.txt
+.claude/

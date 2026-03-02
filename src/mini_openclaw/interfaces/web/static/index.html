@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mini-openclaw</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>mini-openclaw</h1>
+            <span class="status" id="status">Connecting...</span>
+        </header>
+        <div class="main">
+            <div class="chat-area">
+                <div class="messages" id="messages"></div>
+                <form class="input-area" id="input-form">
+                    <input type="text" id="user-input" placeholder="Type a message... (/help, /tools)" autocomplete="off">
+                    <button type="submit">Send</button>
+                </form>
+            </div>
+            <div class="sidebar">
+                <div class="panel">
+                    <h3>Agent Tree</h3>
+                    <div id="agent-tree" class="panel-content"></div>
+                </div>
+                <div class="panel">
+                    <h3>Tool Activity</h3>
+                    <div id="tool-log" class="panel-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
