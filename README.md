@@ -25,7 +25,7 @@ User ─── CLI / TUI / Web UI
     ▼         ▼
 ┌──────────────────┐
 │  ToolRegistry    │
-│  8 built-in      │
+│  9 built-in      │
 │  + plugins + MCP │
 └──────────────────┘
 ```
@@ -35,7 +35,7 @@ User ─── CLI / TUI / Web UI
 - **Dynamic Agent Spawning** — 부모 에이전트가 `spawn_agent` 도구로 자식을 동적 생성 (depth/concurrency 제한)
 - **ReAct Loop** — LLM 호출 → 도구 실행 → 반복, native tool calling 미지원 모델은 ReAct fallback 자동 적용
 - **HITL (Human-in-the-Loop)** — 위험한 도구 실행 전 사용자 승인 요청 (Approve / Always / Deny)
-- **8 Built-in Tools** — file_read, file_write, shell_exec, web_search, http_request, pip_install, python_exec, spawn_agent
+- **9 Built-in Tools** — file_read, file_write, shell_exec, web_search, http_request, pip_install, python_exec, browser_control, spawn_agent
 - **Plugin System** — `@tool` 데코레이터로 커스텀 도구 등록, MCP 서버 연동
 - **3 Interfaces** — Rich CLI, Textual TUI, FastAPI + WebSocket Web UI
 
@@ -123,6 +123,7 @@ tools:
 | `http_request` | HTTP 요청 | No |
 | `pip_install` | Python 패키지 설치 | **Yes** |
 | `python_exec` | Python 코드 실행 | **Yes** |
+| `browser_control` | 웹 브라우저 제어 (Playwright) | **Yes** |
 | `spawn_agent` | 자식 에이전트 생성 | No |
 
 `requires_approval=True`인 도구는 실행 전 HITL 승인이 필요합니다. `--auto-approve` 플래그로 생략 가능.
@@ -143,7 +144,7 @@ async def word_count(text: str) -> str:
 ## Tests
 
 ```bash
-pytest              # 전체 72개 테스트
+pytest              # 전체 84개 테스트
 pytest -v           # 상세 출력
 pytest tests/test_integration.py  # 통합 테스트만
 ```
@@ -153,6 +154,7 @@ pytest tests/test_integration.py  # 통합 테스트만
 | File | Tests | Coverage |
 |------|-------|----------|
 | `test_builtin_tools.py` | 4 | 파일 도구, 샌드박스 보안 |
+| `test_browser_control.py` | 12 | 브라우저 제어, 스크립트 생성 |
 | `test_hitl.py` | 10 | HITL 승인/거부, 정책, 세션 기억 |
 | `test_new_tools.py` | 10 | pip_install, python_exec |
 | `test_react_fallback.py` | 6 | ReAct 패턴 파싱 |

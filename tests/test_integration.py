@@ -225,11 +225,12 @@ def test_builtin_tools_all_registered(registry):
         "file_read", "file_write", "shell_exec",
         "web_search", "http_request",
         "pip_install", "python_exec",
+        "browser_control",
         "spawn_agent",
     ]
     for name in expected:
         assert name in names, f"Missing tool: {name}"
-    assert len(names) == 8
+    assert len(names) == 9
 
 
 def test_tool_definitions_have_required_fields(registry):
@@ -503,9 +504,10 @@ async def test_gateway_start_registers_tools(config):
         await gw.start()
 
     names = gw.tool_registry.list_names()
-    assert len(names) == 8
+    assert len(names) == 9
     assert "spawn_agent" in names
     assert "pip_install" in names
+    assert "browser_control" in names
     await gw.shutdown()
 
 

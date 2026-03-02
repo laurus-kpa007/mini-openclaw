@@ -67,6 +67,7 @@ class ToolRegistry:
 
     def register_builtin_tools(self) -> None:
         """Register all built-in tools."""
+        from mini_openclaw.tools.builtin.browser_control import BrowserControlTool
         from mini_openclaw.tools.builtin.file_read import FileReadTool
         from mini_openclaw.tools.builtin.file_write import FileWriteTool
         from mini_openclaw.tools.builtin.http_request import HttpRequestTool
@@ -84,6 +85,7 @@ class ToolRegistry:
             HttpRequestTool,
             PipInstallTool,
             PythonExecTool,
+            BrowserControlTool,
             SpawnAgentTool,
         ]
         for tool_cls in builtin_classes:
