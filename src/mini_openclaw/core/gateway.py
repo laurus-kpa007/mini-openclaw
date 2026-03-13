@@ -226,6 +226,7 @@ class Gateway:
         parent_agent_id: str | None = None,
         depth: int = 0,
         role: str | None = None,
+        prior_history: list[Message] | None = None,
     ) -> Agent:
         """Spawn a new agent within a session, optionally using a role template."""
         # Enforce depth limit
@@ -290,6 +291,7 @@ class Gateway:
             depth=depth,
             max_iterations=self.config.gateway.max_iterations_per_agent,
             token_budget=session.token_budget,
+            prior_history=prior_history,
         )
 
         self.agents[agent.agent_id] = agent
@@ -344,6 +346,21 @@ class Gateway:
         del self.agents[agent_id]
         logger.info("Terminated agent: %s", agent_id)
 
+    def _build_prior_history(self, session: Session) -> list[Message]:
+        """
+        Build prior conversation history from the session for a new root agent.
+
+        Extracts USER and ASSISTANT messages (the high-level conversation) so
+        the LLM can see the full multi-turn context. Tool-level detail from
+        previous turns is omitted to save context window tokens — only the
+        current turn's tool interactions are tracked in the agent's own _history.
+        """
+        prior: list[Message] = []
+        for msg in session.conversation_history:
+            if msg.role in (MessageRole.USER, MessageRole.ASSISTANT):
+                prior.append(msg)
+        return prior
+
     async def chat(self, session_id: str, user_message: str) -> AgentResult:
         """
         Main entry point: send a user message and get a response.
@@ -353,16 +370,21 @@ class Gateway:
         if not session:
             session = self.create_session()
 
+        # Build prior history BEFORE adding the new user message,
+        # because agent.run() will add the user message itself.
+        prior_history = self._build_prior_history(session)
+
         # Record user message in session
         session.add_message(Message(
             role=MessageRole.USER,
             content=user_message,
         ))
 
-        # Spawn root agent
+        # Spawn root agent with prior conversation context
         agent = await self.spawn_agent(
             session_id=session.session_id,
             depth=0,
+            prior_history=prior_history,
         )
 
         async with self._semaphore:

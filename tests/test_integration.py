@@ -887,3 +887,154 @@ async def test_multiple_sessions_isolated(config):
     assert s1.conversation_history[0].content == "session 1 msg"
     assert s2.conversation_history[0].content == "session 2 msg"
     await gw.shutdown()
+
+
+# ── 11. Multi-turn Conversation Continuity Tests ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_history_passed_to_agent(config):
+    """Root agent receives prior conversation history from the session."""
+    gw = Gateway(config)
+    mock_llm = MockLLMClient([
+        ChatResponse(content="Nice to meet you, Alice!", tokens_used=10),
+        ChatResponse(content="Your name is Alice.", tokens_used=10),
+    ])
+    with patch.object(gw, '_llm_client', mock_llm):
+        await gw.start()
+    gw._llm_client = mock_llm
+
+    session = gw.create_session()
+
+    # First turn
+    result1 = await gw.chat(session.session_id, "My name is Alice")
+    assert result1.success
+
+    # Session should now have USER + ASSISTANT
+    assert len(session.conversation_history) == 2
+    assert session.conversation_history[0].role == MessageRole.USER
+    assert session.conversation_history[0].content == "My name is Alice"
+    assert session.conversation_history[1].role == MessageRole.ASSISTANT
+
+    # Second turn
+    result2 = await gw.chat(session.session_id, "What is my name?")
+    assert result2.success
+
+    # Session should have 4 messages (2 per turn)
+    assert len(session.conversation_history) == 4
+
+    # The agent that handled turn 2 should have had prior history
+    # (the USER + ASSISTANT from turn 1) before the new user message.
+    # turn 2 agent: 2 prior + 1 new USER + 1 ASSISTANT = 4 messages in _history
+    turn2_agent_id = session.agent_ids[-1]
+    turn2_agent = gw.agents.get(turn2_agent_id)
+    if turn2_agent:
+        assert len(turn2_agent._history) == 4
+
+    await gw.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_multi_turn_three_rounds(config):
+    """Three consecutive turns build up history correctly."""
+    gw = Gateway(config)
+    mock_llm = MockLLMClient([
+        ChatResponse(content="Reply 1", tokens_used=10),
+        ChatResponse(content="Reply 2", tokens_used=10),
+        ChatResponse(content="Reply 3", tokens_used=10),
+    ])
+    with patch.object(gw, '_llm_client', mock_llm):
+        await gw.start()
+    gw._llm_client = mock_llm
+
+    session = gw.create_session()
+
+    await gw.chat(session.session_id, "Turn 1")
+    await gw.chat(session.session_id, "Turn 2")
+    await gw.chat(session.session_id, "Turn 3")
+
+    # 6 messages: 3 USER + 3 ASSISTANT
+    assert len(session.conversation_history) == 6
+    roles = [m.role for m in session.conversation_history]
+    assert roles == [
+        MessageRole.USER, MessageRole.ASSISTANT,
+        MessageRole.USER, MessageRole.ASSISTANT,
+        MessageRole.USER, MessageRole.ASSISTANT,
+    ]
+    await gw.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_prior_history_excludes_tool_messages(config):
+    """Prior history passed to new root agent only contains USER/ASSISTANT."""
+    gw = Gateway(config)
+
+    session = gw.create_session()
+
+    # Manually populate session with mixed history (simulating a previous turn
+    # that involved tool calls)
+    session.add_message(Message(role=MessageRole.USER, content="Do something"))
+    session.add_message(Message(role=MessageRole.ASSISTANT, content="I'll use a tool"))
+    session.add_message(Message(role=MessageRole.TOOL, content="tool result data"))
+    session.add_message(Message(role=MessageRole.ASSISTANT, content="Done! Here's the answer."))
+
+    prior = gw._build_prior_history(session)
+
+    # Should only include USER and ASSISTANT, not TOOL
+    assert len(prior) == 3
+    assert all(m.role in (MessageRole.USER, MessageRole.ASSISTANT) for m in prior)
+    assert prior[0].content == "Do something"
+    assert prior[1].content == "I'll use a tool"
+    assert prior[2].content == "Done! Here's the answer."
+    await gw.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_child_agent_does_not_get_session_history(config):
+    """Child agents should NOT inherit session conversation history."""
+    gw = Gateway(config)
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
+        await gw.start()
+    gw._llm_client = mock_llm
+
+    session = gw.create_session()
+
+    # Populate some session history
+    session.add_message(Message(role=MessageRole.USER, content="prior context"))
+    session.add_message(Message(role=MessageRole.ASSISTANT, content="prior response"))
+
+    # Spawn a child agent (not root) — should NOT get prior history
+    root = await gw.spawn_agent(session_id=session.session_id, depth=0)
+    child = await gw.spawn_agent(
+        session_id=session.session_id,
+        parent_agent_id=root.agent_id,
+        depth=1,
+    )
+
+    # Child starts with empty history (no prior_history passed)
+    assert len(child._history) == 0
+    await gw.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_first_turn_no_prior_history(config):
+    """First turn in a new session has empty prior history."""
+    gw = Gateway(config)
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
+        await gw.start()
+    gw._llm_client = mock_llm
+
+    session = gw.create_session()
+
+    # Before any chat, prior history should be empty
+    prior = gw._build_prior_history(session)
+    assert len(prior) == 0
+
+    await gw.chat(session.session_id, "Hello")
+
+    # After first turn, prior history has the turn
+    prior_after = gw._build_prior_history(session)
+    assert len(prior_after) == 2  # USER + ASSISTANT
+    await gw.shutdown()

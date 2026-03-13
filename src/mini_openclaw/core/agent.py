@@ -77,6 +77,7 @@ class Agent:
         depth: int = 0,
         max_iterations: int = 20,
         token_budget: int = 8192,
+        prior_history: list[Message] | None = None,
     ) -> None:
         self.agent_id = agent_id or f"agent:{uuid.uuid4().hex[:12]}"
         self.session = session
@@ -98,8 +99,10 @@ class Agent:
         if "{tool_names}" in self.system_prompt:
             self.system_prompt = self.system_prompt.format(tool_names=tool_names)
 
-        # Per-agent conversation history (separate from session global history)
-        self._history: list[Message] = []
+        # Per-agent conversation history.
+        # For root agents in multi-turn sessions, prior_history carries
+        # earlier USER/ASSISTANT exchanges so the LLM sees the full context.
+        self._history: list[Message] = list(prior_history) if prior_history else []
 
     def _set_state(self, new_state: AgentState) -> None:
         old_state = self.state
