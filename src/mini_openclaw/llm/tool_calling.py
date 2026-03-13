@@ -6,7 +6,6 @@ import logging
 from typing import Any, AsyncIterator
 
 from mini_openclaw.llm.base import ChatResponse, ChatStreamChunk, LLMClient, ToolCall
-from mini_openclaw.llm.ollama_client import OllamaClient
 from mini_openclaw.llm.react_fallback import ReActFallbackClient
 from mini_openclaw.tools.base import ToolDefinition
 
@@ -19,16 +18,16 @@ class ToolCallingAdapter(LLMClient):
     or ReAct prompt-based fallback.
 
     On first call, probes the model for tool support and caches the result.
-    Agent instances use this class - they never interact with OllamaClient
-    or ReActFallbackClient directly.
+    Agent instances use this class - they never interact with OllamaClient,
+    LMStudioClient, or ReActFallbackClient directly.
     """
 
     def __init__(
         self,
-        ollama_client: OllamaClient,
+        llm_client: LLMClient,
         tools: list[ToolDefinition] | None = None,
     ) -> None:
-        self._ollama = ollama_client
+        self._llm_client = llm_client
         self._tools = tools or []
         self._delegate: LLMClient | None = None
         self._resolved = False
@@ -38,13 +37,13 @@ class ToolCallingAdapter(LLMClient):
         if self._delegate is not None:
             return self._delegate
 
-        supports_native = await self._ollama.check_tool_support()
+        supports_native = await self._llm_client.check_tool_support()
         if supports_native:
             logger.info("Using native tool calling")
-            self._delegate = self._ollama
+            self._delegate = self._llm_client
         else:
             logger.info("Model does not support native tools, using ReAct fallback")
-            self._delegate = ReActFallbackClient(self._ollama, self._tools)
+            self._delegate = ReActFallbackClient(self._llm_client, self._tools)
 
         self._resolved = True
         return self._delegate

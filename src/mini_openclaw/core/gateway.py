@@ -21,7 +21,7 @@ from mini_openclaw.core.health_monitor import HealthMonitor, HealthMonitorConfig
 from mini_openclaw.core.session import Message, MessageRole, SandboxConfig, Session
 from mini_openclaw.core.shared_memory import SharedMemory
 from mini_openclaw.core.tool_discovery import ToolDiscovery
-from mini_openclaw.llm.ollama_client import OllamaClient
+from mini_openclaw.llm.base import LLMClient
 from mini_openclaw.tools.base import ToolDefinition
 from mini_openclaw.tools.permissions import resolve_child_tools
 from mini_openclaw.tools.registry import ToolRegistry
@@ -55,7 +55,7 @@ class Gateway:
         self.sessions: dict[str, Session] = {}
         self.agents: dict[str, Agent] = {}
         self._semaphore = asyncio.Semaphore(config.gateway.max_concurrent_agents)
-        self._ollama: OllamaClient | None = None
+        self._llm_client: LLMClient | None = None
         self._mcp_bridge: Any = None
 
         # HITL approval manager
@@ -77,17 +77,40 @@ class Gateway:
         # Tool discovery service
         self.tool_discovery: ToolDiscovery | None = None
 
+    def _create_llm_client(self) -> LLMClient:
+        """Create the appropriate LLM client based on the configured provider."""
+        provider = self.config.llm.provider.lower()
+
+        if provider == "ollama":
+            from mini_openclaw.llm.ollama_client import OllamaClient
+            return OllamaClient(
+                base_url=self.config.llm.base_url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=self.config.llm.timeout,
+            )
+        elif provider == "lmstudio":
+            from mini_openclaw.llm.lmstudio_client import LMStudioClient
+            return LMStudioClient(
+                base_url=self.config.llm.base_url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=self.config.llm.timeout,
+                api_key=self.config.llm.api_key,
+            )
+        else:
+            raise ValueError(
+                f"Unknown LLM provider: '{provider}'. "
+                f"Supported providers: 'ollama', 'lmstudio'"
+            )
+
     async def start(self) -> None:
-        """Initialize the Gateway: connect to Ollama, register tools, load plugins."""
+        """Initialize the Gateway: connect to LLM provider, register tools, load plugins."""
         logger.info("Starting Gateway...")
 
-        # Initialize Ollama client
-        self._ollama = OllamaClient(
-            base_url=self.config.llm.base_url,
-            model=self.config.llm.model,
-            temperature=self.config.llm.temperature,
-            timeout=self.config.llm.timeout,
-        )
+        # Initialize LLM client based on provider config
+        self._llm_client = self._create_llm_client()
+        logger.info("Using LLM provider: %s", self.config.llm.provider)
 
         # Register built-in tools
         self.tool_registry.register_builtin_tools()
@@ -159,8 +182,8 @@ class Gateway:
             await self._mcp_bridge.disconnect_all()
 
         # Close Ollama client
-        if self._ollama:
-            await self._ollama.close()
+        if self._llm_client:
+            await self._llm_client.close()
 
         logger.info("Gateway shut down")
 
@@ -260,7 +283,7 @@ class Gateway:
         agent = Agent(
             session=session,
             gateway=self,
-            llm_client=self._ollama,
+            llm_client=self._llm_client,
             system_prompt=system_prompt,
             tools=tools,
             parent_id=parent_agent_id,

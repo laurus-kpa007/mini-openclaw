@@ -17,12 +17,13 @@ class GatewayConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str = "ollama"
+    provider: str = "ollama"  # "ollama" or "lmstudio"
     base_url: str = "http://localhost:11434"
     model: str = "llama3.1:8b"
     temperature: float = 0.7
     context_window: int = 8192
     timeout: float = 120.0
+    api_key: str = "lm-studio"  # API key for LM Studio (default is fine)
 
 
 class SessionConfig(BaseModel):
