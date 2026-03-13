@@ -67,6 +67,7 @@ class ToolRegistry:
 
     def register_builtin_tools(self) -> None:
         """Register all built-in tools."""
+        from mini_openclaw.tools.builtin.agent_comm_tool import AgentCommTool
         from mini_openclaw.tools.builtin.browser_control import BrowserControlTool
         from mini_openclaw.tools.builtin.cron_job import CronJobTool
         from mini_openclaw.tools.builtin.file_read import FileReadTool
@@ -74,8 +75,10 @@ class ToolRegistry:
         from mini_openclaw.tools.builtin.http_request import HttpRequestTool
         from mini_openclaw.tools.builtin.pip_install import PipInstallTool
         from mini_openclaw.tools.builtin.python_exec import PythonExecTool
+        from mini_openclaw.tools.builtin.shared_memory_tool import SharedMemoryTool
         from mini_openclaw.tools.builtin.shell_exec import ShellExecTool
         from mini_openclaw.tools.builtin.spawn_agent import SpawnAgentTool
+        from mini_openclaw.tools.builtin.spawn_parallel_tool import SpawnParallelTool
         from mini_openclaw.tools.builtin.web_search import WebSearchTool
 
         builtin_classes = [
@@ -89,6 +92,9 @@ class ToolRegistry:
             BrowserControlTool,
             CronJobTool,
             SpawnAgentTool,
+            SpawnParallelTool,
+            AgentCommTool,
+            SharedMemoryTool,
         ]
         for tool_cls in builtin_classes:
             tool = tool_cls()

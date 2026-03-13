@@ -221,7 +221,7 @@ async def test_eventbus_unsubscribe():
 
 
 def test_builtin_tools_all_registered(registry):
-    """All 10 built-in tools are registered."""
+    """All built-in tools are registered."""
     names = registry.list_names()
     expected = [
         "file_read", "file_write", "shell_exec",
@@ -229,10 +229,11 @@ def test_builtin_tools_all_registered(registry):
         "pip_install", "python_exec",
         "browser_control", "cron_job",
         "spawn_agent",
+        "spawn_parallel", "agent_comm", "shared_memory",
     ]
     for name in expected:
         assert name in names, f"Missing tool: {name}"
-    assert len(names) == 10
+    assert len(names) == 13
 
 
 def test_tool_definitions_have_required_fields(registry):
@@ -506,11 +507,14 @@ async def test_gateway_start_registers_tools(config):
         await gw.start()
 
     names = gw.tool_registry.list_names()
-    assert len(names) == 10
+    assert len(names) == 13
     assert "spawn_agent" in names
     assert "pip_install" in names
     assert "browser_control" in names
     assert "cron_job" in names
+    assert "spawn_parallel" in names
+    assert "agent_comm" in names
+    assert "shared_memory" in names
     assert gw.scheduler is not None
     await gw.shutdown()
 
