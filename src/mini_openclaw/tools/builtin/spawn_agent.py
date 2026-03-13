@@ -54,6 +54,17 @@ class SpawnAgentTool:
                     description="Optional custom system prompt for the child agent",
                     required=False,
                 ),
+                ToolParameter(
+                    name="role",
+                    type="string",
+                    description=(
+                        "Optional role template for the child agent. "
+                        "Available roles: researcher, coder, reviewer, sysadmin, analyst, planner. "
+                        "Roles provide optimized system prompts and tool sets."
+                    ),
+                    required=False,
+                    enum=["researcher", "coder", "reviewer", "sysadmin", "analyst", "planner"],
+                ),
             ],
             category="orchestration",
         )

@@ -8,7 +8,6 @@ import re
 from typing import Any, AsyncIterator
 
 from mini_openclaw.llm.base import ChatResponse, ChatStreamChunk, LLMClient, ToolCall
-from mini_openclaw.llm.ollama_client import OllamaClient
 from mini_openclaw.tools.base import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -59,8 +58,8 @@ class ReActFallbackClient(LLMClient):
     Parses the LLM's text output to extract Thought/Action/Action Input/Final Answer.
     """
 
-    def __init__(self, ollama_client: OllamaClient, tools: list[ToolDefinition]) -> None:
-        self._ollama = ollama_client
+    def __init__(self, llm_client: LLMClient, tools: list[ToolDefinition]) -> None:
+        self._llm_client = llm_client
         self._tools = tools
         self._react_prompt = REACT_SYSTEM_PROMPT.format(
             tool_descriptions=_format_tool_descriptions(tools)
@@ -79,7 +78,7 @@ class ReActFallbackClient(LLMClient):
         react_messages = self._inject_react_prompt(messages)
 
         # Call Ollama WITHOUT tools parameter (raw text mode)
-        response = await self._ollama.chat(react_messages, tools=None)
+        response = await self._llm_client.chat(react_messages, tools=None)
         return self._parse_response(response)
 
     async def chat_stream(
@@ -90,7 +89,7 @@ class ReActFallbackClient(LLMClient):
         """Stream not fully supported for ReAct - collect and parse."""
         react_messages = self._inject_react_prompt(messages)
         full_content = ""
-        async for chunk in self._ollama.chat_stream(react_messages, tools=None):
+        async for chunk in self._llm_client.chat_stream(react_messages, tools=None):
             full_content += chunk.content
             yield chunk
 

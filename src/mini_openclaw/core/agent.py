@@ -55,6 +55,10 @@ class AgentResult:
     children_spawned: list[str] = field(default_factory=list)
 
 
+# Tool names that require special handling by the Agent
+AGENT_HANDLED_TOOLS = {"spawn_agent", "spawn_parallel", "agent_comm", "shared_memory"}
+
+
 class Agent:
     """
     Single LLM agent executing within a session.
@@ -127,6 +131,19 @@ class Agent:
                     self.agent_id, iteration + 1, self.max_iterations,
                 )
 
+                # Send heartbeat to health monitor
+                if self.gateway:
+                    self.gateway.health_monitor.heartbeat(
+                        self.agent_id,
+                        metadata={"iteration": iteration + 1},
+                    )
+                    self.gateway.health_monitor.record_activity(
+                        self.agent_id, "iteration"
+                    )
+
+                # Check for incoming messages from other agents
+                await self._check_mailbox()
+
                 # Prepare messages for LLM
                 messages = self._context_manager.prepare_messages(
                     self.system_prompt, self._history
@@ -138,6 +155,12 @@ class Agent:
                 # Call LLM
                 response = await self.llm_client.chat(messages, tools=tool_schemas)
                 total_tokens += response.tokens_used
+
+                # Track tokens in health monitor
+                if self.gateway:
+                    self.gateway.health_monitor.record_tokens(
+                        self.agent_id, response.tokens_used
+                    )
 
                 # Emit LLM response event
                 if self.gateway:
@@ -206,6 +229,7 @@ class Agent:
             logger.exception("[%s] Agent failed", self.agent_id)
             self._set_state(AgentState.FAILED)
             if self.gateway:
+                self.gateway.health_monitor.record_failure(self.agent_id)
                 self.gateway.event_bus.emit_nowait(Event(
                     type=EventType.AGENT_FAILED,
                     source_id=self.agent_id,
@@ -217,6 +241,27 @@ class Agent:
                 tool_calls_made=total_tool_calls,
                 tokens_used=total_tokens,
                 children_spawned=list(self.children),
+            )
+
+    async def _check_mailbox(self) -> None:
+        """Check for incoming messages from other agents and inject them into history."""
+        if not self.gateway:
+            return
+        mailbox = self.gateway.comm_hub.get_mailbox(self.agent_id)
+        if not mailbox or mailbox.is_empty:
+            return
+
+        messages = await mailbox.get_all()
+        for msg in messages:
+            # Inject as a system-like message so the LLM is aware
+            self._history.append(Message(
+                role=MessageRole.TOOL,
+                content=f"[Message from agent {msg.sender_id}] ({msg.msg_type}): {msg.content}",
+                agent_id=self.agent_id,
+            ))
+            logger.info(
+                "[%s] Received message from %s: %s",
+                self.agent_id, msg.sender_id, msg.content[:100],
             )
 
     async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
@@ -240,6 +285,8 @@ class Agent:
                 source_id=self.agent_id,
                 data={"tool": tool_name, "arguments": arguments},
             ))
+            # Record activity in health monitor
+            self.gateway.health_monitor.record_activity(self.agent_id, "tool_call")
 
         # --- HITL: Check if this tool requires approval ---
         tool_def = next((t for t in self.tools if t.name == tool_name), None)
@@ -256,9 +303,18 @@ class Agent:
             if approval.modified_arguments:
                 arguments = approval.modified_arguments
 
-        # Special handling for spawn_agent
-        if tool_name == "spawn_agent":
-            result = await self._handle_spawn(arguments)
+        # --- Agent-handled tools (special routing) ---
+        if tool_name in AGENT_HANDLED_TOOLS:
+            if tool_name == "spawn_agent":
+                result = await self._handle_spawn(arguments)
+            elif tool_name == "spawn_parallel":
+                result = await self._handle_spawn_parallel(arguments)
+            elif tool_name == "agent_comm":
+                result = await self._handle_agent_comm(arguments)
+            elif tool_name == "shared_memory":
+                result = await self._handle_shared_memory(arguments)
+            else:
+                result = ToolResult(success=False, output="", error=f"Unhandled agent tool: {tool_name}")
         else:
             # Regular tool execution via gateway
             if self.gateway:
@@ -346,6 +402,7 @@ class Agent:
         task = spawn_params.get("task", "")
         requested_tools = spawn_params.get("tools")
         custom_prompt = spawn_params.get("system_prompt")
+        role = spawn_params.get("role")
 
         if not task:
             return ToolResult(success=False, output="", error="No task description provided")
@@ -353,12 +410,20 @@ class Agent:
         try:
             self._set_state(AgentState.WAITING_FOR_CHILD)
 
+            # Auto-suggest role if not specified and tool discovery is available
+            if not role and self.gateway.tool_discovery:
+                suggested = self.gateway.tool_discovery.suggest_role(task)
+                if suggested:
+                    role = suggested
+                    logger.info("[%s] Auto-suggested role '%s' for task: %s", self.agent_id, role, task[:60])
+
             child = await self.gateway.spawn_agent(
                 session_id=self.session.session_id if self.session else "",
                 system_prompt=custom_prompt,
                 tool_allowlist=requested_tools,
                 parent_agent_id=self.agent_id,
                 depth=self.depth + 1,
+                role=role,
             )
             self.children.append(child.agent_id)
 
@@ -374,6 +439,248 @@ class Agent:
         except Exception as e:
             logger.exception("Failed to spawn child agent")
             return ToolResult(success=False, output="", error=f"Spawn failed: {e}")
+
+    async def _handle_spawn_parallel(self, params: dict[str, Any]) -> ToolResult:
+        """Handle the spawn_parallel tool call for multi-child parallel execution."""
+        if not self.gateway:
+            return ToolResult(success=False, output="", error="No gateway available")
+
+        from mini_openclaw.core.result_aggregator import (
+            AggregationStrategy,
+            ChildTask,
+            ResultAggregator,
+        )
+
+        tasks_raw = params.get("tasks", [])
+        strategy_name = params.get("strategy", "wait_all")
+        timeout = params.get("timeout")
+
+        if not tasks_raw:
+            return ToolResult(success=False, output="", error="No tasks provided")
+
+        # Parse tasks
+        child_tasks = []
+        for t in tasks_raw:
+            if isinstance(t, str):
+                child_tasks.append(ChildTask(task_description=t))
+            elif isinstance(t, dict):
+                child_tasks.append(ChildTask(
+                    task_description=t.get("task", ""),
+                    tool_allowlist=t.get("tools"),
+                    system_prompt=t.get("system_prompt"),
+                    priority=t.get("priority", 0),
+                ))
+
+        # Parse strategy
+        try:
+            strategy = AggregationStrategy(strategy_name)
+        except ValueError:
+            strategy = AggregationStrategy.WAIT_ALL
+
+        # Emit parallel spawn start event
+        self.gateway.event_bus.emit_nowait(Event(
+            type=EventType.PARALLEL_SPAWN_STARTED,
+            source_id=self.agent_id,
+            data={
+                "task_count": len(child_tasks),
+                "strategy": strategy.value,
+            },
+        ))
+
+        self._set_state(AgentState.WAITING_FOR_CHILD)
+
+        aggregator = ResultAggregator(self.gateway, self)
+        result = await aggregator.spawn_and_aggregate(
+            child_tasks,
+            strategy=strategy,
+            timeout=float(timeout) if timeout else None,
+        )
+
+        # Emit completion event
+        self.gateway.event_bus.emit_nowait(Event(
+            type=EventType.PARALLEL_SPAWN_COMPLETED,
+            source_id=self.agent_id,
+            data={
+                "success": result.success,
+                "strategy": result.strategy_used,
+                "children_total": result.children_total,
+                "children_succeeded": result.children_succeeded,
+            },
+        ))
+
+        return ToolResult(
+            success=result.success,
+            output=result.summary,
+        )
+
+    async def _handle_agent_comm(self, params: dict[str, Any]) -> ToolResult:
+        """Handle the agent_comm tool for inter-agent messaging."""
+        if not self.gateway:
+            return ToolResult(success=False, output="", error="No gateway available")
+
+        from mini_openclaw.core.agent_comm import AgentMessage, MessagePriority
+
+        action = params.get("action", "")
+        content = params.get("content", "")
+        receiver_id = params.get("receiver_id", "")
+        priority_str = params.get("priority", "normal")
+
+        priority_map = {
+            "low": MessagePriority.LOW,
+            "normal": MessagePriority.NORMAL,
+            "high": MessagePriority.HIGH,
+            "urgent": MessagePriority.URGENT,
+        }
+        priority = priority_map.get(priority_str, MessagePriority.NORMAL)
+
+        if action == "send":
+            if not receiver_id:
+                return ToolResult(success=False, output="", error="receiver_id required for 'send'")
+            if not content:
+                return ToolResult(success=False, output="", error="content required for 'send'")
+            msg = AgentMessage(
+                sender_id=self.agent_id,
+                receiver_id=receiver_id,
+                content=content,
+                msg_type="info",
+                priority=priority,
+            )
+            delivered = await self.gateway.comm_hub.send(msg)
+            if delivered:
+                self.gateway.event_bus.emit_nowait(Event(
+                    type=EventType.AGENT_MESSAGE_SENT,
+                    source_id=self.agent_id,
+                    data={"receiver": receiver_id, "content_preview": content[:100]},
+                ))
+            return ToolResult(
+                success=delivered,
+                output=f"Message {'delivered' if delivered else 'failed'} to {receiver_id}",
+            )
+
+        elif action == "send_to_parent":
+            if not content:
+                return ToolResult(success=False, output="", error="content required")
+            if not self.parent_id:
+                return ToolResult(success=False, output="", error="No parent agent")
+            delivered = await self.gateway.comm_hub.send_to_parent(
+                self.agent_id, content, priority=priority,
+            )
+            return ToolResult(
+                success=delivered,
+                output=f"Message {'delivered' if delivered else 'failed'} to parent {self.parent_id}",
+            )
+
+        elif action == "broadcast":
+            if not content:
+                return ToolResult(success=False, output="", error="content required")
+            root = self.gateway.comm_hub._find_root(self.agent_id)
+            group = f"family:{root}"
+            count = await self.gateway.comm_hub.broadcast(
+                self.agent_id, group, content, priority=priority,
+            )
+            self.gateway.event_bus.emit_nowait(Event(
+                type=EventType.AGENT_BROADCAST,
+                source_id=self.agent_id,
+                data={"group": group, "delivered_count": count},
+            ))
+            return ToolResult(
+                success=True,
+                output=f"Broadcast delivered to {count} agents in group '{group}'",
+            )
+
+        elif action == "receive":
+            mailbox = self.gateway.comm_hub.get_mailbox(self.agent_id)
+            if not mailbox or mailbox.is_empty:
+                return ToolResult(success=True, output="No pending messages")
+            messages = await mailbox.get_all()
+            parts = []
+            for msg in messages:
+                parts.append(f"[From {msg.sender_id}] ({msg.msg_type}, {msg.priority.name}): {msg.content}")
+            return ToolResult(success=True, output="\n".join(parts))
+
+        return ToolResult(success=False, output="", error=f"Unknown action: {action}")
+
+    async def _handle_shared_memory(self, params: dict[str, Any]) -> ToolResult:
+        """Handle the shared_memory tool for inter-agent state sharing."""
+        if not self.gateway or not self.session:
+            return ToolResult(success=False, output="", error="No gateway/session available")
+
+        from mini_openclaw.core.shared_memory import AccessLevel
+
+        shared_mem = self.gateway.get_shared_memory(self.session.session_id)
+        if not shared_mem:
+            return ToolResult(success=False, output="", error="No shared memory for this session")
+
+        action = params.get("action", "")
+        key = params.get("key", "")
+        value = params.get("value", "")
+
+        access_map = {
+            "public": AccessLevel.PUBLIC,
+            "family": AccessLevel.FAMILY,
+            "private": AccessLevel.PRIVATE,
+        }
+        access_level = access_map.get(params.get("access_level", "family"), AccessLevel.FAMILY)
+
+        if action == "put":
+            if not key:
+                return ToolResult(success=False, output="", error="key required for 'put'")
+            tags = params.get("tags", [])
+            try:
+                entry = await shared_mem.put(
+                    key=key,
+                    value=value,
+                    owner_id=self.agent_id,
+                    access_level=access_level,
+                    tags=tags if isinstance(tags, list) else [],
+                )
+                self.gateway.event_bus.emit_nowait(Event(
+                    type=EventType.SHARED_MEMORY_UPDATED,
+                    source_id=self.agent_id,
+                    data={"key": key, "action": "put", "version": entry.version},
+                ))
+                return ToolResult(
+                    success=True,
+                    output=f"Stored '{key}' (version={entry.version}, access={access_level.value})",
+                )
+            except PermissionError as e:
+                return ToolResult(success=False, output="", error=str(e))
+
+        elif action == "get":
+            if not key:
+                return ToolResult(success=False, output="", error="key required for 'get'")
+            result = await shared_mem.get(key, requester_id=self.agent_id)
+            if result is None:
+                return ToolResult(success=True, output=f"Key '{key}' not found or not accessible")
+            return ToolResult(success=True, output=str(result))
+
+        elif action == "delete":
+            if not key:
+                return ToolResult(success=False, output="", error="key required for 'delete'")
+            deleted = await shared_mem.delete(key, requester_id=self.agent_id)
+            return ToolResult(
+                success=True,
+                output=f"Key '{key}' {'deleted' if deleted else 'not found or no permission'}",
+            )
+
+        elif action == "list":
+            prefix = params.get("key")  # Reuse key param as prefix
+            keys = await shared_mem.list_keys(requester_id=self.agent_id, prefix=prefix)
+            if not keys:
+                return ToolResult(success=True, output="No accessible keys found")
+            return ToolResult(success=True, output=f"Keys: {', '.join(keys)}")
+
+        elif action == "search":
+            tag = params.get("tag", "")
+            if not tag:
+                return ToolResult(success=False, output="", error="tag required for 'search'")
+            entries = await shared_mem.search_by_tag(tag, requester_id=self.agent_id)
+            if not entries:
+                return ToolResult(success=True, output=f"No entries with tag '{tag}'")
+            parts = [f"  {e.key}: {str(e.value)[:100]}" for e in entries]
+            return ToolResult(success=True, output=f"Entries with tag '{tag}':\n" + "\n".join(parts))
+
+        return ToolResult(success=False, output="", error=f"Unknown action: {action}")
 
     def cancel(self) -> None:
         """Cancel the running agent task."""

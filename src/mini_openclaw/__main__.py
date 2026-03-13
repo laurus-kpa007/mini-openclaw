@@ -199,7 +199,7 @@ async def _chat_loop(config, auto_approve: bool) -> None:
 
         console.print(
             Panel(
-                f"mini-openclaw v0.1.0 | model: {config.llm.model}\n"
+                f"mini-openclaw v0.1.0 | provider: {config.llm.provider} | model: {config.llm.model}\n"
                 f"Tools: {', '.join(gateway.tool_registry.list_names())}\n"
                 f"HITL: {'auto-approve' if auto_approve else 'interactive'}\n"
                 "Type 'exit' or 'quit' to end, '/tools' '/jobs' '/hitl' for info",

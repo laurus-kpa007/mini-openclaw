@@ -221,7 +221,7 @@ async def test_eventbus_unsubscribe():
 
 
 def test_builtin_tools_all_registered(registry):
-    """All 10 built-in tools are registered."""
+    """All built-in tools are registered."""
     names = registry.list_names()
     expected = [
         "file_read", "file_write", "shell_exec",
@@ -229,10 +229,11 @@ def test_builtin_tools_all_registered(registry):
         "pip_install", "python_exec",
         "browser_control", "cron_job",
         "spawn_agent",
+        "spawn_parallel", "agent_comm", "shared_memory",
     ]
     for name in expected:
         assert name in names, f"Missing tool: {name}"
-    assert len(names) == 10
+    assert len(names) == 13
 
 
 def test_tool_definitions_have_required_fields(registry):
@@ -501,16 +502,19 @@ async def test_gateway_start_registers_tools(config):
     """Gateway.start() registers all 10 builtin tools."""
     gw = Gateway(config)
     # Patch Ollama to avoid network calls
-    mock_ollama = MockLLMClient()
-    with patch.object(gw, '_ollama', mock_ollama):
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
 
     names = gw.tool_registry.list_names()
-    assert len(names) == 10
+    assert len(names) == 13
     assert "spawn_agent" in names
     assert "pip_install" in names
     assert "browser_control" in names
     assert "cron_job" in names
+    assert "spawn_parallel" in names
+    assert "agent_comm" in names
+    assert "shared_memory" in names
     assert gw.scheduler is not None
     await gw.shutdown()
 
@@ -521,8 +525,8 @@ async def test_gateway_spawn_agent_depth_limit(config):
     from mini_openclaw.core.errors import AgentDepthLimitError
 
     gw = Gateway(config)
-    mock_ollama = MockLLMClient()
-    with patch.object(gw, '_ollama', mock_ollama):
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
 
     session = gw.create_session()
@@ -539,8 +543,8 @@ async def test_gateway_spawn_agent_depth_limit(config):
 async def test_gateway_spawn_root_and_child(config):
     """Gateway can spawn a root agent and a child agent with correct tool filtering."""
     gw = Gateway(config)
-    mock_ollama = MockLLMClient()
-    with patch.object(gw, '_ollama', mock_ollama):
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
 
     session = gw.create_session()
@@ -580,13 +584,13 @@ async def test_gateway_chat_full_flow(config):
     """Full chat flow: user message → root agent → LLM → response."""
     gw = Gateway(config)
 
-    mock_ollama = MockLLMClient([
+    mock_llm = MockLLMClient([
         ChatResponse(content="Hi! I'm mini-openclaw.", tokens_used=20),
     ])
 
-    with patch.object(gw, '_ollama', mock_ollama):
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
-    gw._ollama = mock_ollama  # Ensure the mock is used by spawned agents
+    gw._llm_client = mock_llm  # Ensure the mock is used by spawned agents
 
     session = gw.create_session()
     result = await gw.chat(session.session_id, "Hello")
@@ -603,13 +607,13 @@ async def test_gateway_events_emitted_during_chat(config):
     """Chat triggers SESSION_CREATED, AGENT_SPAWNED, and AGENT_COMPLETED events."""
     gw = Gateway(config)
 
-    mock_ollama = MockLLMClient([
+    mock_llm = MockLLMClient([
         ChatResponse(content="Done.", tokens_used=5),
     ])
 
-    with patch.object(gw, '_ollama', mock_ollama):
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
-    gw._ollama = mock_ollama
+    gw._llm_client = mock_llm
 
     events_received: list[EventType] = []
 
@@ -659,10 +663,10 @@ async def test_gateway_hitl_integration(config):
 async def test_gateway_terminate_agent(config):
     """terminate_agent removes the agent and cascades to children."""
     gw = Gateway(config)
-    mock_ollama = MockLLMClient()
-    with patch.object(gw, '_ollama', mock_ollama):
+    mock_llm = MockLLMClient()
+    with patch.object(gw, '_llm_client', mock_llm):
         await gw.start()
-    gw._ollama = mock_ollama
+    gw._llm_client = mock_llm
 
     session = gw.create_session()
     root = await gw.spawn_agent(session_id=session.session_id, depth=0)

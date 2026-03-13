@@ -9,14 +9,19 @@ from typing import Any
 
 from mini_openclaw.config import AppConfig
 from mini_openclaw.core.agent import Agent, AgentResult
+from mini_openclaw.core.agent_comm import AgentCommHub
+from mini_openclaw.core.agent_roles import RoleRegistry
 from mini_openclaw.core.errors import (
     AgentConcurrencyError,
     AgentDepthLimitError,
     AgentError,
 )
 from mini_openclaw.core.events import Event, EventBus, EventType
+from mini_openclaw.core.health_monitor import HealthMonitor, HealthMonitorConfig
 from mini_openclaw.core.session import Message, MessageRole, SandboxConfig, Session
-from mini_openclaw.llm.ollama_client import OllamaClient
+from mini_openclaw.core.shared_memory import SharedMemory
+from mini_openclaw.core.tool_discovery import ToolDiscovery
+from mini_openclaw.llm.base import LLMClient
 from mini_openclaw.tools.base import ToolDefinition
 from mini_openclaw.tools.permissions import resolve_child_tools
 from mini_openclaw.tools.registry import ToolRegistry
@@ -50,7 +55,7 @@ class Gateway:
         self.sessions: dict[str, Session] = {}
         self.agents: dict[str, Agent] = {}
         self._semaphore = asyncio.Semaphore(config.gateway.max_concurrent_agents)
-        self._ollama: OllamaClient | None = None
+        self._llm_client: LLMClient | None = None
         self._mcp_bridge: Any = None
 
         # HITL approval manager
@@ -60,17 +65,52 @@ class Gateway:
         # Scheduler (lazy-started in start())
         self.scheduler: Any = None
 
+        # --- New subsystems for Dynamic Agent Spawning ---
+        # Inter-agent communication hub
+        self.comm_hub = AgentCommHub()
+        # Per-session shared memory stores
+        self._shared_memories: dict[str, SharedMemory] = {}
+        # Agent health monitor
+        self.health_monitor = HealthMonitor(self, HealthMonitorConfig())
+        # Role templates registry
+        self.role_registry = RoleRegistry()
+        # Tool discovery service
+        self.tool_discovery: ToolDiscovery | None = None
+
+    def _create_llm_client(self) -> LLMClient:
+        """Create the appropriate LLM client based on the configured provider."""
+        provider = self.config.llm.provider.lower()
+
+        if provider == "ollama":
+            from mini_openclaw.llm.ollama_client import OllamaClient
+            return OllamaClient(
+                base_url=self.config.llm.base_url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=self.config.llm.timeout,
+            )
+        elif provider == "lmstudio":
+            from mini_openclaw.llm.lmstudio_client import LMStudioClient
+            return LMStudioClient(
+                base_url=self.config.llm.base_url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=self.config.llm.timeout,
+                api_key=self.config.llm.api_key,
+            )
+        else:
+            raise ValueError(
+                f"Unknown LLM provider: '{provider}'. "
+                f"Supported providers: 'ollama', 'lmstudio'"
+            )
+
     async def start(self) -> None:
-        """Initialize the Gateway: connect to Ollama, register tools, load plugins."""
+        """Initialize the Gateway: connect to LLM provider, register tools, load plugins."""
         logger.info("Starting Gateway...")
 
-        # Initialize Ollama client
-        self._ollama = OllamaClient(
-            base_url=self.config.llm.base_url,
-            model=self.config.llm.model,
-            temperature=self.config.llm.temperature,
-            timeout=self.config.llm.timeout,
-        )
+        # Initialize LLM client based on provider config
+        self._llm_client = self._create_llm_client()
+        logger.info("Using LLM provider: %s", self.config.llm.provider)
 
         # Register built-in tools
         self.tool_registry.register_builtin_tools()
@@ -104,6 +144,9 @@ class Gateway:
             ", ".join(self.tool_registry.list_names()),
         )
 
+        # Initialize tool discovery service
+        self.tool_discovery = ToolDiscovery(self.tool_registry)
+
         # Initialize and start scheduler
         from mini_openclaw.core.scheduler import Scheduler
         from mini_openclaw.tools.builtin.cron_job import set_scheduler
@@ -111,11 +154,17 @@ class Gateway:
         set_scheduler(self.scheduler)
         await self.scheduler.start()
 
+        # Start health monitor
+        await self.health_monitor.start()
+
         logger.info("Gateway started (model=%s)", self.config.llm.model)
 
     async def shutdown(self) -> None:
         """Gracefully shut down: terminate agents, close connections."""
         logger.info("Shutting down Gateway...")
+
+        # Stop health monitor
+        await self.health_monitor.stop()
 
         # Stop scheduler
         if self.scheduler:
@@ -133,8 +182,8 @@ class Gateway:
             await self._mcp_bridge.disconnect_all()
 
         # Close Ollama client
-        if self._ollama:
-            await self._ollama.close()
+        if self._llm_client:
+            await self._llm_client.close()
 
         logger.info("Gateway shut down")
 
@@ -154,12 +203,19 @@ class Gateway:
         )
         self.sessions[session.session_id] = session
 
+        # Create shared memory for this session
+        self._shared_memories[session.session_id] = SharedMemory(session.session_id)
+
         self.event_bus.emit_nowait(Event(
             type=EventType.SESSION_CREATED,
             source_id=session.session_id,
         ))
         logger.info("Created session: %s", session.session_id)
         return session
+
+    def get_shared_memory(self, session_id: str) -> SharedMemory | None:
+        """Get the shared memory store for a session."""
+        return self._shared_memories.get(session_id)
 
     async def spawn_agent(
         self,
@@ -169,8 +225,9 @@ class Gateway:
         tool_denylist: list[str] | None = None,
         parent_agent_id: str | None = None,
         depth: int = 0,
+        role: str | None = None,
     ) -> Agent:
-        """Spawn a new agent within a session."""
+        """Spawn a new agent within a session, optionally using a role template."""
         # Enforce depth limit
         if depth > self.config.gateway.max_spawn_depth:
             raise AgentDepthLimitError(
@@ -195,6 +252,18 @@ class Gateway:
         if not session:
             raise AgentError(f"Session '{session_id}' not found")
 
+        # Apply role template if specified
+        role_template = None
+        if role:
+            role_template = self.role_registry.get(role)
+            if role_template:
+                if not system_prompt:
+                    system_prompt = role_template.system_prompt
+                if not tool_allowlist and role_template.tool_allowlist:
+                    tool_allowlist = role_template.tool_allowlist
+                if not tool_denylist and role_template.tool_denylist:
+                    tool_denylist = role_template.tool_denylist
+
         # Resolve tool set
         all_tool_defs = self.tool_registry.list_definitions()
         if parent_agent_id:
@@ -214,7 +283,7 @@ class Gateway:
         agent = Agent(
             session=session,
             gateway=self,
-            llm_client=self._ollama,
+            llm_client=self._llm_client,
             system_prompt=system_prompt,
             tools=tools,
             parent_id=parent_agent_id,
@@ -226,6 +295,15 @@ class Gateway:
         self.agents[agent.agent_id] = agent
         session.agent_ids.append(agent.agent_id)
 
+        # Register with communication hub and shared memory
+        self.comm_hub.register_agent(agent.agent_id, parent_id=parent_agent_id)
+        shared_mem = self._shared_memories.get(session_id)
+        if shared_mem:
+            shared_mem.register_agent(agent.agent_id, parent_id=parent_agent_id)
+
+        # Register with health monitor
+        self.health_monitor.register_agent(agent.agent_id)
+
         self.event_bus.emit_nowait(Event(
             type=EventType.AGENT_SPAWNED,
             source_id=agent.agent_id,
@@ -233,12 +311,13 @@ class Gateway:
                 "parent_id": parent_agent_id,
                 "depth": depth,
                 "tools": [t.name for t in tools],
+                "role": role,
             },
         ))
 
         logger.info(
-            "Spawned agent %s (depth=%d, tools=%s, parent=%s)",
-            agent.agent_id, depth, [t.name for t in tools], parent_agent_id,
+            "Spawned agent %s (depth=%d, tools=%s, parent=%s, role=%s)",
+            agent.agent_id, depth, [t.name for t in tools], parent_agent_id, role,
         )
         return agent
 
@@ -253,6 +332,15 @@ class Gateway:
                 await self.terminate_agent(child_id, cascade=True)
 
         agent.cancel()
+
+        # Unregister from subsystems
+        self.comm_hub.unregister_agent(agent_id)
+        self.health_monitor.unregister_agent(agent_id)
+        if agent.session:
+            shared_mem = self._shared_memories.get(agent.session.session_id)
+            if shared_mem:
+                shared_mem.unregister_agent(agent_id)
+
         del self.agents[agent_id]
         logger.info("Terminated agent: %s", agent_id)
 
@@ -312,12 +400,14 @@ class Gateway:
         return {"agents": [self._agent_to_dict(a) for a in roots]}
 
     def _agent_to_dict(self, agent: Agent) -> dict[str, Any]:
+        health = self.health_monitor.get_health(agent.agent_id)
         return {
             "id": agent.agent_id,
             "state": agent.state.value,
             "depth": agent.depth,
             "parent_id": agent.parent_id,
             "tools": [t.name for t in agent.tools],
+            "health": health.status.value if health else "unknown",
             "children": [
                 self._agent_to_dict(self.agents[cid])
                 for cid in agent.children

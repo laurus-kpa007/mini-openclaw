@@ -26,6 +26,18 @@ class EventType(Enum):
     LLM_RESPONSE = "llm_response"
     MESSAGE_ADDED = "message_added"
     SESSION_CREATED = "session_created"
+    # Inter-agent communication
+    AGENT_MESSAGE_SENT = "agent_message_sent"
+    AGENT_MESSAGE_RECEIVED = "agent_message_received"
+    AGENT_BROADCAST = "agent_broadcast"
+    # Health monitoring
+    AGENT_HEALTH_CHANGED = "agent_health_changed"
+    AGENT_RECOVERY_ACTION = "agent_recovery_action"
+    # Shared memory
+    SHARED_MEMORY_UPDATED = "shared_memory_updated"
+    # Parallel spawning
+    PARALLEL_SPAWN_STARTED = "parallel_spawn_started"
+    PARALLEL_SPAWN_COMPLETED = "parallel_spawn_completed"
 
 
 @dataclass
